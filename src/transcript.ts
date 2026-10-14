@@ -45,7 +45,7 @@ interface Entry {
   message?: { id?: unknown; model?: unknown; content?: Block[] | string; usage?: Usage };
   toolUseResult?: { resolvedModel?: unknown; isAsync?: unknown; status?: unknown };
   compactMetadata?: { postTokens?: unknown };
-  attachment?: { type?: string };
+  attachment?: { type?: string; prompt?: unknown };
 }
 
 const emptyTranscript = (): TranscriptData => ({ tools: [], skills: [], mcpServers: [], mcpErrors: [], agents: [], todos: [] });
@@ -173,10 +173,23 @@ class Parser {
       this.data.contextTokens = typeof post === 'number' && Number.isFinite(post) && post >= 0 ? Math.trunc(post) : undefined;
     }
     // A background agent's tool_result lands at launch; its completion is this enqueue.
-    if (entry.type === 'queue-operation' && entry.operation === 'enqueue' && typeof entry.content === 'string' && at) {
-      const taskId = /<task-id>([^<]+)<\/task-id>/.exec(entry.content)?.[1];
+    // Some transcripts (forked/resumed sessions) carry the same <task-notification>
+    // payload as an `attachment.queued_command` entry instead, with the notice under
+    // `attachment.prompt`. Accept either carrier so those agents still complete.
+    let taskNotification: string | undefined;
+    if (entry.type === 'queue-operation' && entry.operation === 'enqueue' && typeof entry.content === 'string') {
+      taskNotification = entry.content;
+    } else if (
+      entry.type === 'attachment' &&
+      entry.attachment?.type === 'queued_command' &&
+      typeof entry.attachment.prompt === 'string'
+    ) {
+      taskNotification = entry.attachment.prompt;
+    }
+    if (taskNotification && at) {
+      const taskId = /<task-id>([^<]+)<\/task-id>/.exec(taskNotification)?.[1];
       const toolUseId =
-        /<tool-use-id>([^<]+)<\/tool-use-id>/.exec(entry.content)?.[1] ??
+        /<tool-use-id>([^<]+)<\/tool-use-id>/.exec(taskNotification)?.[1] ??
         (taskId ? this.agentIdToToolUseId.get(taskId) : undefined);
       if (toolUseId && taskId) this.agentCompletions.set(toolUseId, at);
     }
